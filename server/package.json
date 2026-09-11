@@ -1,0 +1,18 @@
+{
+  "name": "tabtalk-server",
+  "version": "1.0.0",
+  "private": true,
+  "description": "TabTalk's own backend — Express API + Node's built-in SQLite. No third-party BaaS.",
+  "type": "commonjs",
+  "main": "src/index.js",
+  "scripts": {
+    "start": "node src/index.js",
+    "dev": "node --watch src/index.js"
+  },
+  "dependencies": {
+    "express": "^4.19.2"
+  },
+  "engines": {
+    "node": ">=22.5.0"
+  }
+}
