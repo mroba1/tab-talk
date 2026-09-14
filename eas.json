@@ -10,7 +10,7 @@
         "buildType": "apk"
       },
       "env": {
-        "EXPO_PUBLIC_API_BASE_URL": "https://REPLACE-WITH-YOUR-RAILWAY-URL.up.railway.app/api"
+        "EXPO_PUBLIC_API_BASE_URL": "https://tab-talk.onrender.com/api"
       }
     },
     "production": {
@@ -19,7 +19,7 @@
         "buildType": "apk"
       },
       "env": {
-        "EXPO_PUBLIC_API_BASE_URL": "https://REPLACE-WITH-YOUR-RAILWAY-URL.up.railway.app/api"
+        "EXPO_PUBLIC_API_BASE_URL": "https://tab-talk.onrender.com/api"
       }
     }
   },
