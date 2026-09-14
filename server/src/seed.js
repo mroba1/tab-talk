@@ -1,54 +1,65 @@
 'use strict';
 
-const { db } = require('./db');
+const { pool } = require('./db');
 
 function mockPhoto(seed, width, height) {
   return `https://picsum.photos/seed/${encodeURIComponent(seed)}/${width}/${height}`;
 }
 
 // Ported from src/data/seed.ts — same conversations, same starting order
-// state, so the demo behaves identically to the local-only version. Runs
-// once: if the chats table already has rows, seeding is skipped entirely.
-function seedIfEmpty() {
-  const { count } = db.prepare('SELECT COUNT(*) AS count FROM chats').get();
-  if (count > 0) return;
+// state, so the demo behaves identically to the original local-only version.
+// Runs once: if the chats table already has rows, seeding is skipped.
+async function seedIfEmpty() {
+  const { rows } = await pool.query('SELECT COUNT(*)::int AS count FROM chats');
+  if (rows[0].count > 0) return;
 
   const now = Date.now();
   const minutesAgo = (m) => now - m * 60 * 1000;
   const hoursAgo = (h) => now - h * 60 * 60 * 1000;
   const daysAgo = (d) => now - d * 24 * 60 * 60 * 1000;
 
-  const insertChat = db.prepare(
-    'INSERT INTO chats (id, merchant_id, last_message, last_message_at, has_pending_invoice) VALUES (?, ?, ?, ?, ?)'
-  );
-  const insertMessage = db.prepare(
-    `INSERT INTO messages (id, chat_id, sender, type, text, image_uri, invoice_id, order_id, created_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
-  );
-  const insertOrder = db.prepare(
-    `INSERT INTO orders (id, code, merchant_id, chat_id, delivery, note, payment_status, escrow_status, status, created_at, secured_at, accepted_at, ready_at, completed_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
-  );
-  const insertOrderItem = db.prepare('INSERT INTO order_items (order_id, name, qty, price) VALUES (?, ?, ?, ?)');
-  const insertTransaction = db.prepare(
-    'INSERT INTO transactions (id, merchant_id, label, sub, amount, direction, date) VALUES (?, ?, ?, ?, ?, ?, ?)'
-  );
-  const setMeta = db.prepare('INSERT OR REPLACE INTO meta (key, value) VALUES (?, ?)');
-
-  const tx = db.exec.bind(db);
-  tx('BEGIN');
+  const client = await pool.connect();
   try {
+    await client.query('BEGIN');
+
+    const insertOrder = (id, code, merchantId, chatId, delivery, note, paymentStatus, escrowStatus, status, createdAt, securedAt, acceptedAt, readyAt, completedAt) =>
+      client.query(
+        `INSERT INTO orders (id, code, merchant_id, chat_id, delivery, note, payment_status, escrow_status, status, created_at, secured_at, accepted_at, ready_at, completed_at)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)`,
+        [id, code, merchantId, chatId, delivery, note, paymentStatus, escrowStatus, status, createdAt, securedAt, acceptedAt, readyAt, completedAt]
+      );
+    const insertOrderItem = (orderId, name, qty, price) =>
+      client.query('INSERT INTO order_items (order_id, name, qty, price) VALUES ($1, $2, $3, $4)', [orderId, name, qty, price]);
+    const insertChat = (id, merchantId, lastMessage, lastMessageAt, hasPendingInvoice) =>
+      client.query(
+        'INSERT INTO chats (id, merchant_id, last_message, last_message_at, has_pending_invoice) VALUES ($1, $2, $3, $4, $5)',
+        [id, merchantId, lastMessage, lastMessageAt, hasPendingInvoice]
+      );
+    const insertMessage = (id, chatId, sender, type, text, imageUri, invoiceId, orderId, createdAt) =>
+      client.query(
+        `INSERT INTO messages (id, chat_id, sender, type, text, image_uri, invoice_id, order_id, created_at)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
+        [id, chatId, sender, type, text, imageUri, invoiceId, orderId, createdAt]
+      );
+    const insertTransaction = (id, merchantId, label, sub, amount, direction, date) =>
+      client.query(
+        'INSERT INTO transactions (id, merchant_id, label, sub, amount, direction, date) VALUES ($1, $2, $3, $4, $5, $6, $7)',
+        [id, merchantId, label, sub, amount, direction, date]
+      );
+    const setMeta = (key, value) =>
+      client.query('INSERT INTO meta (key, value) VALUES ($1, $2) ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value', [key, value]);
+
     // Order 1 — Sweet Crumb Bakery, the live interactive demo (still unpaid).
-    insertOrder.run('order-1', 'TT-10482', 'sweet-crumb', 'sweet-crumb', 0, null, 'unpaid', 'none', 'awaiting_payment', minutesAgo(30), null, null, null, null);
-    insertOrderItem.run('order-1', 'Custom Cake', 1, 40);
+    await insertOrder('order-1', 'TT-10482', 'sweet-crumb', 'sweet-crumb', 0, null, 'unpaid', 'none', 'awaiting_payment', minutesAgo(30), null, null, null, null);
+    await insertOrderItem('order-1', 'Custom Cake', 1, 40);
 
     // Order 2 — Fix-It Repairs, pre-completed end to end for a no-interaction demo.
-    insertOrder.run('order-2', 'TT-10399', 'fix-it', 'fix-it', 0, null, 'released', 'released', 'completed', daysAgo(1), hoursAgo(19), null, null, hoursAgo(3));
-    insertOrderItem.run('order-2', 'Leak Repair', 1, 65);
+    await insertOrder('order-2', 'TT-10399', 'fix-it', 'fix-it', 0, null, 'released', 'released', 'completed', daysAgo(1), hoursAgo(19), null, null, hoursAgo(3));
+    await insertOrderItem('order-2', 'Leak Repair', 1, 65);
 
-    insertChat.run('sweet-crumb', 'sweet-crumb', 'Sent you an invoice — $40.00', minutesAgo(2), 1);
-    insertChat.run('fix-it', 'fix-it', 'Escrow released, thanks again!', hoursAgo(3), 0);
-    insertChat.run('luz-tailoring', 'luz-tailoring', 'Thank you, see you Thursday!', daysAgo(2), 0);
+    await insertChat('sweet-crumb', 'sweet-crumb', 'Sent you an invoice — $40.00', minutesAgo(2), true);
+    await insertChat('fix-it', 'fix-it', 'Escrow released, thanks again!', hoursAgo(3), false);
+    await insertChat('luz-tailoring', 'luz-tailoring', 'Thank you, see you Thursday!', daysAgo(2), false);
 
     const messages = [
       ['m1', 'sweet-crumb', 'user', 'text', 'Hi! Can you make this cake for Friday?', null, null, null, minutesAgo(12)],
@@ -71,19 +82,21 @@ function seedIfEmpty() {
       ['m9', 'luz-tailoring', 'merchant', 'text', 'Yes! Bring them by anytime before Thursday and I can have them ready same day.', null, null, null, daysAgo(2.5)],
       ['m10', 'luz-tailoring', 'merchant', 'text', 'Thank you, see you Thursday!', null, null, null, daysAgo(2)],
     ];
-    for (const m of messages) insertMessage.run(...m);
+    for (const m of messages) await insertMessage(...m);
 
-    insertTransaction.run('t1', 'fix-it', 'Fix-It Repairs', 'Quote deposit · Aug 12', 20, 'debit', daysAgo(5));
-    insertTransaction.run('t2', 'luz-tailoring', 'Refund · Luz Tailoring', 'Aug 9', 12, 'credit', daysAgo(8));
+    await insertTransaction('t1', 'fix-it', 'Fix-It Repairs', 'Quote deposit · Aug 12', 20, 'debit', daysAgo(5));
+    await insertTransaction('t2', 'luz-tailoring', 'Refund · Luz Tailoring', 'Aug 9', 12, 'credit', daysAgo(8));
 
-    setMeta.run('onboardingComplete', 'false');
-    setMeta.run('availableBalance', '128.4');
-    setMeta.run('escrowBalance', '0');
+    await setMeta('onboardingComplete', 'false');
+    await setMeta('availableBalance', '128.4');
+    await setMeta('escrowBalance', '0');
 
-    tx('COMMIT');
+    await client.query('COMMIT');
   } catch (err) {
-    tx('ROLLBACK');
+    await client.query('ROLLBACK');
     throw err;
+  } finally {
+    client.release();
   }
 }
 

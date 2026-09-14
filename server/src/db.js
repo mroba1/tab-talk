@@ -1,82 +1,94 @@
 'use strict';
 
-const path = require('node:path');
-const { DatabaseSync } = require('node:sqlite');
+const { Pool, types } = require('pg');
 
-// On Railway (or any host with a persistent volume), set DB_PATH to a file
-// inside that volume's mount — e.g. /data/data.sqlite — so the database
-// survives redeploys. Defaults to a local file for plain `npm start` dev.
-const DB_PATH = process.env.DB_PATH || path.join(__dirname, '..', 'data.sqlite');
-const db = new DatabaseSync(DB_PATH);
-console.log(`TabTalk backend using database at ${DB_PATH}`);
+// BIGINT columns (our millisecond timestamps) come back as strings by
+// default, to avoid precision loss on huge values. Ours are well within
+// Number.MAX_SAFE_INTEGER, so parse them straight back to numbers — the
+// app code (and its TypeScript types) expect plain numbers throughout.
+types.setTypeParser(20, (val) => parseInt(val, 10));
 
-db.exec(`
-  CREATE TABLE IF NOT EXISTS meta (
-    key TEXT PRIMARY KEY,
-    value TEXT NOT NULL
-  );
+const connectionString = process.env.DATABASE_URL;
+if (!connectionString) {
+  throw new Error('DATABASE_URL is required — e.g. your Neon connection string. Set it in server/.env for local dev.');
+}
 
-  CREATE TABLE IF NOT EXISTS chats (
-    id TEXT PRIMARY KEY,
-    merchant_id TEXT NOT NULL,
-    last_message TEXT NOT NULL DEFAULT '',
-    last_message_at INTEGER NOT NULL,
-    has_pending_invoice INTEGER NOT NULL DEFAULT 0
-  );
+const pool = new Pool({
+  connectionString,
+  // Neon (and most hosted Postgres) terminate TLS with a cert this app
+  // doesn't otherwise need to validate — standard for this class of host.
+  ssl: connectionString.includes('localhost') ? false : { rejectUnauthorized: false },
+});
 
-  CREATE TABLE IF NOT EXISTS messages (
-    id TEXT PRIMARY KEY,
-    chat_id TEXT NOT NULL,
-    sender TEXT NOT NULL,
-    type TEXT NOT NULL,
-    text TEXT,
-    image_uri TEXT,
-    invoice_id TEXT,
-    order_id TEXT,
-    created_at INTEGER NOT NULL
-  );
+async function initSchema() {
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS meta (
+      key TEXT PRIMARY KEY,
+      value TEXT NOT NULL
+    );
 
-  CREATE TABLE IF NOT EXISTS orders (
-    id TEXT PRIMARY KEY,
-    code TEXT NOT NULL,
-    merchant_id TEXT NOT NULL,
-    chat_id TEXT NOT NULL,
-    delivery REAL NOT NULL DEFAULT 0,
-    note TEXT,
-    payment_status TEXT NOT NULL,
-    escrow_status TEXT NOT NULL,
-    status TEXT NOT NULL,
-    created_at INTEGER NOT NULL,
-    secured_at INTEGER,
-    accepted_at INTEGER,
-    ready_at INTEGER,
-    completed_at INTEGER
-  );
+    CREATE TABLE IF NOT EXISTS chats (
+      id TEXT PRIMARY KEY,
+      merchant_id TEXT NOT NULL,
+      last_message TEXT NOT NULL DEFAULT '',
+      last_message_at BIGINT NOT NULL,
+      has_pending_invoice BOOLEAN NOT NULL DEFAULT FALSE
+    );
 
-  CREATE TABLE IF NOT EXISTS order_items (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    order_id TEXT NOT NULL,
-    name TEXT NOT NULL,
-    qty INTEGER NOT NULL,
-    price REAL NOT NULL
-  );
+    CREATE TABLE IF NOT EXISTS messages (
+      id TEXT PRIMARY KEY,
+      chat_id TEXT NOT NULL,
+      sender TEXT NOT NULL,
+      type TEXT NOT NULL,
+      text TEXT,
+      image_uri TEXT,
+      invoice_id TEXT,
+      order_id TEXT,
+      created_at BIGINT NOT NULL
+    );
 
-  CREATE TABLE IF NOT EXISTS transactions (
-    id TEXT PRIMARY KEY,
-    merchant_id TEXT,
-    label TEXT NOT NULL,
-    sub TEXT NOT NULL,
-    amount REAL NOT NULL,
-    direction TEXT NOT NULL,
-    date INTEGER NOT NULL
-  );
+    CREATE TABLE IF NOT EXISTS orders (
+      id TEXT PRIMARY KEY,
+      code TEXT NOT NULL,
+      merchant_id TEXT NOT NULL,
+      chat_id TEXT NOT NULL,
+      delivery DOUBLE PRECISION NOT NULL DEFAULT 0,
+      note TEXT,
+      payment_status TEXT NOT NULL,
+      escrow_status TEXT NOT NULL,
+      status TEXT NOT NULL,
+      created_at BIGINT NOT NULL,
+      secured_at BIGINT,
+      accepted_at BIGINT,
+      ready_at BIGINT,
+      completed_at BIGINT
+    );
 
-  CREATE TABLE IF NOT EXISTS saved_merchants (
-    merchant_id TEXT PRIMARY KEY
-  );
+    CREATE TABLE IF NOT EXISTS order_items (
+      id SERIAL PRIMARY KEY,
+      order_id TEXT NOT NULL,
+      name TEXT NOT NULL,
+      qty INTEGER NOT NULL,
+      price DOUBLE PRECISION NOT NULL
+    );
 
-  CREATE INDEX IF NOT EXISTS idx_messages_chat ON messages(chat_id);
-  CREATE INDEX IF NOT EXISTS idx_order_items_order ON order_items(order_id);
-`);
+    CREATE TABLE IF NOT EXISTS transactions (
+      id TEXT PRIMARY KEY,
+      merchant_id TEXT,
+      label TEXT NOT NULL,
+      sub TEXT NOT NULL,
+      amount DOUBLE PRECISION NOT NULL,
+      direction TEXT NOT NULL,
+      date BIGINT NOT NULL
+    );
 
-module.exports = { db };
+    CREATE TABLE IF NOT EXISTS saved_merchants (
+      merchant_id TEXT PRIMARY KEY
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_messages_chat ON messages(chat_id);
+    CREATE INDEX IF NOT EXISTS idx_order_items_order ON order_items(order_id);
+  `);
+}
+
+module.exports = { pool, initSchema };
